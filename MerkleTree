@@ -1,0 +1,190 @@
+#include <iostream>
+#include <iomanip>
+#include <sstream>
+#include <openssl/evp.h>
+#include <openssl/sha.h>
+#include <string>
+#include<vector>
+#include<fstream>
+#define linesize 128
+
+using namespace std;
+//simple Student structure
+struct Student
+{
+    int id;
+    string name;
+    float gpa;
+};
+//structure for a Node in MerkelTree
+struct NodeMerkel
+{
+    NodeMerkel* left;
+    NodeMerkel* right;
+    string hash;
+
+    //constructor for a leaf node
+    NodeMerkel(const string& hash) {
+        this->left = nullptr;
+        this->right = nullptr;
+        this->hash = hash;
+    }
+
+    //constructor for a parent node
+    NodeMerkel(NodeMerkel* left, NodeMerkel* right, const string& combinedHash)
+    {
+        this->left = left;
+        this->right = right;
+        this->hash = combinedHash;
+    }
+
+    //destructor to dealloc memory
+    ~NodeMerkel()
+    {
+        delete this->left;
+        delete this->right;
+    }
+};
+
+//function that uses sha256 hash method
+string sha256(const string& input) {
+    unsigned char hash[SHA256_DIGEST_LENGTH]; //length of the hash
+    EVP_MD_CTX* context = EVP_MD_CTX_new(); //creating the context
+
+    if (context == nullptr) {
+        throw runtime_error("Failed to create EVP_MD_CTX");
+    }
+
+    //initializing the context
+    if (EVP_DigestInit_ex(context, EVP_sha256(), nullptr) != 1) {
+        EVP_MD_CTX_free(context);
+        throw runtime_error("Failed to initialize EVP_DigestInit_ex");
+    }
+
+    //updating the context with the given input
+    if (EVP_DigestUpdate(context, input.c_str(), input.size()) != 1) {
+        EVP_MD_CTX_free(context);
+        throw runtime_error("Failed to update hash with EVP_DigestUpdate");
+    }
+
+    //finalize hash
+    if (EVP_DigestFinal_ex(context, hash, nullptr) != 1) {
+        EVP_MD_CTX_free(context);
+        throw runtime_error("Failed to finalize hash with EVP_DigestFinal_ex");
+    }
+
+    EVP_MD_CTX_free(context);
+
+    //hashing
+    stringstream ss;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        ss << hex << setw(2) << setfill('0') << static_cast<int>(hash[i]);
+    }
+
+    return ss.str();
+}
+
+//function for creating a leaf node
+NodeMerkel* leafNode(const Student& student)
+{
+    string data = to_string(student.id) + string(student.name) + to_string(student.gpa);
+    string hash = sha256(data);
+    return new NodeMerkel(hash);
+}
+
+//function for creating a parent node
+NodeMerkel* parentNode(NodeMerkel* rightChild, NodeMerkel* leftChild)
+{
+    string combinedHash = sha256(rightChild->hash + leftChild->hash);
+    return new NodeMerkel(leftChild, rightChild, combinedHash);
+}
+
+//inserting a node into the tree, duplicating the base nodes to be a power of 2 for easier searching
+NodeMerkel* insertNode(vector<NodeMerkel*>& nodes)
+{
+    while (nodes.size() > 1)
+    {
+        vector<NodeMerkel*> next;
+        for (size_t i = 0; i < nodes.size(); i += 2)
+        {
+            if (i + 1 < nodes.size())
+            {
+                next.push_back(parentNode(nodes[i], nodes[i + 1]));
+            }
+            else
+            {
+                next.push_back(parentNode(nodes[i], nodes[i]));
+            }
+        }
+        nodes = next;
+    }
+    return nodes.front();
+}
+
+//function to read Students structures from a txt file
+vector<Student> readStudentsFromFile(const char* txtFileName) {
+    vector<Student> studentVector;
+    ifstream inputFile(txtFileName);
+
+    if (!inputFile) {
+        cerr << "Error: the file could not be opened" << endl;
+        return studentVector;
+    }
+
+    int id;
+    string name;
+    float gpa;
+
+    while (inputFile >> id >> ws && getline(inputFile, name, ',') && inputFile >> gpa) {
+        studentVector.push_back({ id, name, gpa });
+    }
+    inputFile.close();
+    return studentVector;
+}
+
+//printing the tree in its real form
+void printTree(NodeMerkel* root, int indent = 0) {
+    if (root != nullptr) {
+        if (root->right) {
+            printTree(root->right, indent + 4);
+        }
+        if (indent) {
+            cout << setw(indent) << ' ';
+        }
+        if (root->right) {
+            cout << " /\n";
+            cout << setw(indent) << ' ';
+        }
+        cout << root->hash.substr(0, 8) << "..." << endl;
+        if (root->left) {
+            cout << setw(indent) << ' ' << " \\\n";
+            printTree(root->left, indent + 4);
+        }
+    }
+}
+int main() {
+    vector<Student> vectorStudents = readStudentsFromFile("students.txt");
+    if (vectorStudents.empty())
+    {
+        cerr << "The file was empty, no students were read.";
+        return 1;
+    }
+
+    vector<NodeMerkel*> leafNodes;
+    //inserting the students into a vector of nodes as leaf nodes
+    for (const auto& student : vectorStudents)
+    {
+        leafNodes.push_back(leafNode(student));
+    }
+
+    //getting the root node 
+    NodeMerkel* merkleRoot = insertNode(leafNodes);
+
+    //printing the hash
+    cout << "Merkle root hash: " << merkleRoot->hash << endl;
+
+    //printing the tree in its normal form
+    cout << "Merkle tree structure : " << endl;
+    printTree(merkleRoot);
+    return 0;
+}
